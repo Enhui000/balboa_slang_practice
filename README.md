@@ -1,30 +1,53 @@
-# balboa
-UCSD CSE 167 codebase
-https://cseweb.ucsd.edu/~tzli/cse167/
+# Slang NPR — branch1
 
-This is a revised version of balboa that builds on [SlangPy](https://github.com/shader-slang/slangpy). Currently only Homework 1 and 2 are completed. Future homeworks will be added soon.
-
-# Setup
-Clone the repository:
+## First download
 ```bash
-git clone https://github.com/BachiLi/balboa_slang_public.git
-cd balboa_slang_public
-```
-
-We use [uv](https://docs.astral.sh/uv/) to manage Python packages and environments. Go to the linked website to install it if you haven't. Once installed, run
-```bash
+git clone --branch branch1 https://github.com/Enhui000/balboa_slang_practice.git
+cd balboa_slang_practice
 uv sync
+uv run python npr_demo.py --style combined
 ```
 
-Then try
+## Switch versions
+Run one pair at a time, from the repository folder. Commit your changes before switching.
 ```bash
-uv run python main.py 1_1
+git fetch origin
+git switch branch1
+uv run python npr_demo.py --style combined
+```
+```bash
+git switch branch2
+uv run python npr_demo.py --style combined
+```
+```bash
+git switch toon-shading
+uv run python npr_demo.py --style toon
+```
+```bash
+git switch lines
+uv run python npr_demo.py --style lines
 ```
 
-You should see a window with white background.
+## Download latest changes
+```bash
+git pull --ff-only
+uv sync
+uv run python npr_demo.py --style combined
+```
 
-# Platforms
+## Upload your changes on the current branch
+```bash
+git branch --show-current
+git status
+git add -u
+git commit -m "Update renderer"
+git push -u origin HEAD
+```
+For a new file, run `git add path/to/file` before committing.
 
-Balboa depends on [SlangPy](https://github.com/shader-slang/slangpy) as a GPU programming framework, and should work on Windows, Linux, and Apple Silicon Macs. 
+## Export a picture
+```bash
+uv run python npr_demo.py --style combined --output outputs/branch1.png
+```
 
-**Intel Macs:** SlangPy does not currently publish macOS x86_64 wheels, so setup may require building SlangPy from source. If you are using an Intel Mac and `uv sync` fails because no compatible SlangPy package is available, you may need to build SlangPy from source. Contact the staff/instructor if you run into issues.
+Requires Git and uv. See [README_NPR.md](README_NPR.md) for rendering details, controls, attribution, and known limits. macOS Metal and the interactive window still require verification on your machine.

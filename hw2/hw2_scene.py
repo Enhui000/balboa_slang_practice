@@ -187,8 +187,38 @@ def compose_transformations(transformations):
     F = np.eye(4, dtype=np.float32)
 
     for transform in transformations:
-        pass
-        # HW 2.3 TODO: your code here
+        name, value = next(iter(transform.items()))
+        T = np.eye(4, dtype=np.float32)
+        if name == 'scale':
+            T[:3, :3] = np.diag(value)
+        elif name == 'translate':
+            T[:3, 3] = value
+        elif name in ('rotate_x', 'rotate_y', 'rotate_z'):
+            angle = math.radians(float(np.asarray(value).reshape(-1)[0]))
+            c, s = math.cos(angle), math.sin(angle)
+            if name == 'rotate_x':
+                T[:3, :3] = [[1, 0, 0], [0, c, -s], [0, s, c]]
+            elif name == 'rotate_y':
+                T[:3, :3] = [[c, 0, s], [0, 1, 0], [-s, 0, c]]
+            else:
+                T[:3, :3] = [[c, -s, 0], [s, c, 0], [0, 0, 1]]
+        elif name == 'lookat':
+            p = np.asarray(value['position'], dtype=np.float32)
+            d = np.asarray(value['target'], dtype=np.float32) - p
+            if np.linalg.norm(d) < 1e-8:
+                raise ValueError('lookat position and target must differ')
+            d /= np.linalg.norm(d)
+            r = np.cross(d, value['up'])
+            if np.linalg.norm(r) < 1e-8:
+                raise ValueError('lookat up must not be parallel to view direction')
+            r /= np.linalg.norm(r)
+            u_prime = np.cross(r, d)
+            T[:3, :3] = np.column_stack((r, u_prime, -d))
+            T[:3, 3] = p
+        else:
+            raise ValueError(f'Unknown transformation: {name}')
+        # Listed order: rotation, then translation means T @ R.
+        F = T @ F
 
     return F
 
