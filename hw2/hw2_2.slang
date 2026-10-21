@@ -1,3 +1,4 @@
+import raster_common;
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void compute_main(uint2 tid : SV_DispatchThreadID,
@@ -22,7 +23,14 @@ void compute_main(uint2 tid : SV_DispatchThreadID,
         return;
     }
 
-    // TODO: HW 2.1
-
-    color_image[ipixel] = float4(float3(0.0), 1.0);
+    float3 b_prime;
+    if (!barycentric(float2(ipixel)+0.5, sp0, sp1, sp2, b_prime)) return;
+    float3 b = b_prime * float3(inv_depth0, inv_depth1, inv_depth2);
+    float inv_depth = b.x+b.y+b.z;
+    if (inv_depth <= 0) return;
+    float depth = 1.0/inv_depth;
+    if (depth >= depth_image[ipixel]) return;
+    b /= inv_depth;
+    depth_image[ipixel] = depth;
+    color_image[ipixel] = float4(b.x*c0+b.y*c1+b.z*c2, 1.0);
 }
