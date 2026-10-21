@@ -23,7 +23,10 @@ Headless exports:
 uv run python npr_demo.py --output outputs/teapot.png
 uv run python npr_demo.py --compare outputs/teapot
 uv run python npr_demo.py --turntable outputs/teapot.gif --frames 48 --fps 12
+uv run python npr_demo.py --style combined --diagnose outputs/mac-check
 ```
+
+Diagnostics include the actual backend/device and versions, non-background pixel counts, finite-value checks, `color.png`, `combined.png`, `coverage.png`, `normals.png`, and signed normal/world-Z data in `geometry.npz`. On a Mac, run `MTL_DEBUG_LAYER=1 uv run python tests/check_npr_metal.py` to verify four rotation times and the cel/line/hatching contributions on actual Metal hardware.
 
 Five styles are available: `phong`, `toon`, `lines`, `hatching`, `combined`. Use `--style lines` to see that internal features are included. The standalone toon and hatching modes preserve the source shading formulas; combined mode adds controlled composition.
 
@@ -44,7 +47,7 @@ The original framework, dependencies, `main.py`, window, device/buffer utilities
 | File | Role |
 | --- | --- |
 | `npr_demo.py` | Separate launch/export command |
-| `hw2/npr.py` | Existing scene parsing, SlangPy render pass, two MRTs, composition |
+| `hw2/npr.py` | Existing scene parsing, color/geometry render passes, composition |
 | `hw2/npr_lighting.slang` | Phong comparison, original toon/hatching formulas, combined color |
 | `hw2/npr_lines.slang` | Existing normal/depth contour algorithm and supersample resolve |
 | `hw2/npr_assets/` | Six original 256×256 hatch images |
@@ -66,7 +69,7 @@ Preserved:
 
 Integration changes:
 
-- One Slang MRT pass shares exactly the same visible fragments between color and normal/depth data; a compute pass adds lines and resolves 2×2 supersampling.
+- Color and normal/depth use MRT on non-Metal backends. With the pinned SlangPy 0.42.0, Metal uses two single-attachment passes to avoid an RHI error that confuses attachment count with texture array length. Both passes use the same vertex shader, transforms, mesh order and freshly cleared depth to select the same visible surface. A compute pass adds lines and resolves 2×2 supersampling.
 - Floating-point geometry targets preserve signed normals/Z. The original OpenGL unsized RGB render targets may clamp/quantize them. Viewport-border reads are clamped. This is a formula-level port, not a claim of pixel-identical output from the original application.
 - `combined` lifts the darkest cel band and the hatching input by `--shadow-lift` (default 0.24), then mixes ink by `--hatch-strength` (0.4). This prevents source black endpoints from hiding internal ink. Standalone `toon` / `hatching` retain the original formulas.
 - Line width and the hatch period are measured in output pixels so changing SSAA does not double their apparent size. Ink defaults to a dark warm color; use `--ink-color 0 0 0` for source black.
@@ -78,4 +81,4 @@ Useful controls: `--color-steps`, `--hatch-strength`, `--hatch-scale`, `--shadow
 
 This is a screen-space sketch renderer. It detects visible depth discontinuities and normal changes, not all artist-drawn suggestive contours or every tiny smooth-surface feature. It does not implement path-space line transport, cast shadows, curvature-aligned strokes, or temporal reprojection. Hatch strokes stay in screen space as the model rotates, as in the source. Small mesh features and cel thresholds can change across frames; SSAA reduces spatial aliasing but does not guarantee temporal stability. Fixed world-Z and normal thresholds are scene/scale dependent.
 
-Validation used real Slang shaders on Mesa's software Vulkan device, not a physical GPU. macOS Metal, the interactive GUI, and hardware performance still need a run on the user's machine. See `VALIDATION.md`.
+The initial validation used Mesa software Vulkan. The Metal fix was subsequently verified on the user's Apple M5 / macOS 27.0.1 with SlangPy 0.42.0: four rotation times, all five styles, finite raw color/geometry/output, and visual inspection of exported PNGs. The user confirmed the interactive window displays the model; automated GUI capture was unavailable. Other Mac/GPU models and performance across devices remain unverified. See `VALIDATION.md`.

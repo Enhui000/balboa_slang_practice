@@ -2,6 +2,8 @@
 from pathlib import Path
 import time
 import json
+import platform
+from importlib.metadata import version
 import numpy as np
 from PIL import Image
 import slangpy as spy
@@ -33,7 +35,6 @@ class NPRRenderer:
         self.width, self.height = camera.resolution
         w, h = self.width*self.ssaa, self.height*self.ssaa
         self.render_width, self.render_height = w, h
-        self.program = self.device.load_program('hw2/npr_lighting.slang', ['vertex_main', 'fragment_main'])
         self.lines = device.load_compute_shader(self.device, 'hw2/npr_lines.slang')
         self.color = self.device.create_texture(width=w, height=h, format=spy.Format.rgba32_float,
             usage=spy.TextureUsage.render_target | spy.TextureUsage.shader_resource | spy.TextureUsage.copy_source)
@@ -42,27 +43,38 @@ class NPRRenderer:
         self.depth = self.device.create_texture(width=w, height=h, format=spy.Format.d32_float,
             usage=spy.TextureUsage.depth_stencil)
         self.output = buffer.create_texture_2d(self.device, self.width, self.height)
-        self.pipeline = self.device.create_render_pipeline(program=self.program, input_layout=None,
-            primitive_topology=spy.PrimitiveTopology.triangle_list,
-            targets=[spy.ColorTargetDesc({'format': spy.Format.rgba32_float}) for _ in range(2)],
-            depth_stencil=spy.DepthStencilDesc({'format': spy.Format.d32_float,
-                'depth_test_enable': True, 'depth_write_enable': True, 'depth_func': spy.ComparisonFunc.less}),
-            rasterizer=spy.RasterizerDesc({'cull_mode': spy.CullMode.none}))
-        # Both MRTs are written only by the closest fragment, keeping depth/normals coherent.
         self.color_view = self.color.create_view()
         self.geometry_view = self.geometry.create_view()
         self.depth_view = self.depth.create_view()
-        self.render_pass_desc = spy.RenderPassDesc({
-            'color_attachments': [
-                spy.RenderPassColorAttachment({'view': self.color_view,
-                    'load_op': spy.LoadOp.clear, 'store_op': spy.StoreOp.store,
-                    'clear_value': spy.float4(*self.scene.background, 1.0)}),
-                spy.RenderPassColorAttachment({'view': self.geometry_view,
-                    'load_op': spy.LoadOp.clear, 'store_op': spy.StoreOp.store,
-                    'clear_value': spy.float4(0.5,0.5,0.0,0.0)})],
-            'depth_stencil_attachment': spy.RenderPassDepthStencilAttachment({
+        color_attachment = spy.RenderPassColorAttachment({'view': self.color_view,
+            'load_op': spy.LoadOp.clear, 'store_op': spy.StoreOp.store,
+            'clear_value': spy.float4(*self.scene.background, 1.0)})
+        geometry_attachment = spy.RenderPassColorAttachment({'view': self.geometry_view,
+            'load_op': spy.LoadOp.clear, 'store_op': spy.StoreOp.store,
+            'clear_value': spy.float4(0.5,0.5,0.0,0.0)})
+        # SlangPy 0.42's Metal RHI sets renderTargetArrayLength to the color
+        # attachment count. Two ordinary 2D MRTs then fail Metal validation
+        # (2 layers requested, 1 available). Keep MRT on other backends; on
+        # Metal draw color and geometry separately with identical transforms,
+        # mesh order and freshly cleared depth so both select the same surface.
+        self.separate_geometry_pass = self.device.info.type == spy.DeviceType.metal
+        passes = [('fragment_color', [color_attachment]),
+                  ('fragment_geometry', [geometry_attachment])] if self.separate_geometry_pass else [
+                  ('fragment_main', [color_attachment, geometry_attachment])]
+        self.render_passes = []
+        for fragment, attachments in passes:
+            program = self.device.load_program('hw2/npr_lighting.slang', ['vertex_main', fragment])
+            pipeline = self.device.create_render_pipeline(program=program, input_layout=None,
+                primitive_topology=spy.PrimitiveTopology.triangle_list,
+                targets=[spy.ColorTargetDesc({'format': spy.Format.rgba32_float}) for _ in attachments],
+                depth_stencil=spy.DepthStencilDesc({'format': spy.Format.d32_float,
+                    'depth_test_enable': True, 'depth_write_enable': True, 'depth_func': spy.ComparisonFunc.less}),
+                rasterizer=spy.RasterizerDesc({'cull_mode': spy.CullMode.none}))
+            desc = spy.RenderPassDesc({'color_attachments': attachments,
+                'depth_stencil_attachment': spy.RenderPassDepthStencilAttachment({
                 'view': self.depth_view, 'depth_load_op': spy.LoadOp.clear,
                 'depth_store_op': spy.StoreOp.dont_care, 'depth_clear_value': 1.0})})
+            self.render_passes.append((pipeline, desc))
         self.meshes = []
         for mesh in self.scene.meshes:
             gpu = {}
@@ -91,31 +103,32 @@ class NPRRenderer:
         t %= scene.duration
         cam_to_world = animated_matrix(camera.cam_to_world, camera.transform_keyframes, t)
         view = np.linalg.inv(cam_to_world).astype(np.float32)
-        render_pass = encoder.begin_render_pass(self.render_pass_desc)
-        for mesh, gpu in zip(scene.meshes, self.meshes):
-            model = animated_matrix(mesh.model_matrix, mesh.transform_keyframes, t)
-            normal = np.linalg.inv(model[:3,:3]).T.astype(np.float32)
-            root = render_pass.bind_pipeline(self.pipeline)
-            cursor = spy.ShaderCursor(root)
-            fields = dict(MVP=spy.float4x4(self.projection@view@model),
-                model_matrix=spy.float4x4(model), normal_matrix=spy.float3x3(normal),
-                vertices=gpu['vertices'], vertex_normals=gpu['vertex_normals'], vertex_uvs=gpu['vertex_uvs'],
-                Kd_texture=gpu['Kd_texture'], Kd_sampler=self.Kd_sampler,
-                light_dir=spy.float3(scene.light_dir),
-                light_position=spy.float3(self.light_position or [0,0,0]),
-                point_light=self.light_position is not None,
-                object_color=spy.float3(mesh.material['Kd']), use_texture='texture' in mesh.material, light_color=spy.float3(scene.light_color),
-                camera_position=spy.float3(cam_to_world[:3,3]), Ks=spy.float3(mesh.material['Ks']),
-                exponent=float(mesh.material['exponent']), style=STYLES[style], color_steps=float(args.color_steps),
-                hatch_strength=float(args.hatch_strength), shadow_lift=float(args.shadow_lift), hatch_scale=float(args.hatch_scale),
-                resolution_scale=float(self.ssaa), render_height=self.render_height)
-            fields.update({f'hatch{i}': tex for i, tex in enumerate(self.hatches)})
-            for name, value in fields.items():
-                cursor.find_field(name).write(value)
-            render_pass.set_render_state(gpu['state'])
-            render_pass.draw_indexed(spy.DrawArguments({'vertex_count': int(mesh.faces.size),
-                                                      'instance_count': 1, 'start_index_location': 0}))
-        render_pass.end()
+        for pipeline, desc in self.render_passes:
+            render_pass = encoder.begin_render_pass(desc)
+            for mesh, gpu in zip(scene.meshes, self.meshes):
+                model = animated_matrix(mesh.model_matrix, mesh.transform_keyframes, t)
+                normal = np.linalg.inv(model[:3,:3]).T.astype(np.float32)
+                root = render_pass.bind_pipeline(pipeline)
+                cursor = spy.ShaderCursor(root)
+                fields = dict(MVP=spy.float4x4(self.projection@view@model),
+                    model_matrix=spy.float4x4(model), normal_matrix=spy.float3x3(normal),
+                    vertices=gpu['vertices'], vertex_normals=gpu['vertex_normals'], vertex_uvs=gpu['vertex_uvs'],
+                    Kd_texture=gpu['Kd_texture'], Kd_sampler=self.Kd_sampler,
+                    light_dir=spy.float3(scene.light_dir),
+                    light_position=spy.float3(self.light_position or [0,0,0]),
+                    point_light=self.light_position is not None,
+                    object_color=spy.float3(mesh.material['Kd']), use_texture='texture' in mesh.material, light_color=spy.float3(scene.light_color),
+                    camera_position=spy.float3(cam_to_world[:3,3]), Ks=spy.float3(mesh.material['Ks']),
+                    exponent=float(mesh.material['exponent']), style=STYLES[style], color_steps=float(args.color_steps),
+                    hatch_strength=float(args.hatch_strength), shadow_lift=float(args.shadow_lift), hatch_scale=float(args.hatch_scale),
+                    resolution_scale=float(self.ssaa), render_height=self.render_height)
+                fields.update({f'hatch{i}': tex for i, tex in enumerate(self.hatches)})
+                for name, value in fields.items():
+                    cursor.find_field(name).write(value)
+                render_pass.set_render_state(gpu['state'])
+                render_pass.draw_indexed(spy.DrawArguments({'vertex_count': int(mesh.faces.size),
+                                                          'instance_count': 1, 'start_index_location': 0}))
+            render_pass.end()
         encoder.global_barrier()
         self.lines.kernel.dispatch(thread_count=[self.width,self.height,1], command_encoder=encoder,
             vars=dict(scene_color=self.color, normal_depth=self.geometry, output_image=self.output,
@@ -133,10 +146,19 @@ class NPRRenderer:
         background = np.asarray(self.scene.background)
         color_changed = np.any(np.abs(color[..., :3] - background) > 1e-5, axis=-1)
         geometry_changed = np.any(np.abs(geometry - np.array([0.5, 0.5, 0, 0])) > 1e-5, axis=-1)
-        report = dict(mesh_count=len(self.scene.meshes),
+        output_changed = np.any(np.abs(result[..., :3] - background) > 1e-5, axis=-1)
+        report = dict(backend=self.device.info.api_name, adapter=self.device.info.adapter_name,
+                      platform=platform.platform(),
+                      versions=dict(python=platform.python_version(), slangpy=version('slangpy'), numpy=np.__version__),
+                      render_path='separate_color_geometry' if self.separate_geometry_pass else 'mrt',
+                      time=float(t), style=style, ssaa=self.ssaa,
+                      mesh_count=len(self.scene.meshes),
                       triangle_count=sum(len(m.faces) for m in self.scene.meshes),
                       color_pixels=int(color_changed.sum()),
                       geometry_pixels=int(geometry_changed.sum()),
+                      output_pixels=int(output_changed.sum()),
+                      color_geometry_coverage_equal=bool(np.array_equal(color_changed, geometry_changed)),
+                      color_finite=bool(np.isfinite(color).all()),
                       geometry_finite=bool(np.isfinite(geometry).all()),
                       output_finite=bool(np.isfinite(result).all()))
         camera = self.scene.camera
@@ -155,9 +177,15 @@ class NPRRenderer:
         mask = np.repeat(geometry_changed[..., None], 4, axis=-1).astype(np.float32)
         mask[..., 3] = 1
         image.save_png(directory / 'coverage.png', mask)
+        normals = np.ones_like(geometry)
+        normals[..., :3] = np.where(geometry_changed[..., None], geometry[..., :3]*0.5+0.5, background)
+        image.save_png(directory / 'normals.png', normals)
+        # Preserve signed normals and world Z without PNG clipping/quantization.
+        np.savez_compressed(directory / 'geometry.npz', normal_depth=geometry)
         (directory / 'report.json').write_text(json.dumps(report, indent=2))
         print('NPR diagnostics: ' + json.dumps(report))
         print('Diagnostic images: ' + str(directory))
+        return report
 
     def pixels(self, t, style):
         encoder = self.device.create_command_encoder()
@@ -211,7 +239,7 @@ def run(args):
 
 
 def add_arguments(parser):
-    parser.add_argument('--diagnose', metavar='DIRECTORY', help='Export raw render color, geometry coverage, and diagnostic counts')
+    parser.add_argument('--diagnose', metavar='DIRECTORY', help='Export color, coverage, normals, raw geometry and backend diagnostics')
     parser.add_argument('scene', nargs='?', default='scenes/npr/teapot.json')
     parser.add_argument('-time', '--time', type=float, default=0.0)
     parser.add_argument('--style', choices=list(STYLES), default='combined')

@@ -69,8 +69,7 @@ float hatch_tone(float diffuse, float2 pixel) {
          + hatch3.Load(int3(p,0)).r*w0.z + hatch2.Load(int3(p,0)).r*w1.x
          + hatch1.Load(int3(p,0)).r*w1.y + hatch0.Load(int3(p,0)).r*w1.z;
 }
-[shader("fragment")]
-FragmentOutput fragment_main(VertexOutput input) {
+FragmentOutput shade_fragment(VertexOutput input) {
     float3 n = normalize(input.world_normal);
     float3 l = normalize(point_light ? light_position-input.world_position : light_dir);
     float3 v = normalize(camera_position-input.world_position);
@@ -97,4 +96,21 @@ FragmentOutput fragment_main(VertexOutput input) {
     // Float targets retain signed values (see port differences in README_NPR).
     output.normal_depth=float4(input.world_normal,input.world_position.z);
     return output;
+}
+
+[shader("fragment")]
+FragmentOutput fragment_main(VertexOutput input) {
+    return shade_fragment(input);
+}
+
+// SlangPy 0.42's Metal backend confuses the MRT attachment count with
+// renderTargetArrayLength. Use single-attachment passes on that backend.
+[shader("fragment")]
+float4 fragment_color(VertexOutput input) : SV_Target0 {
+    return shade_fragment(input).color;
+}
+
+[shader("fragment")]
+float4 fragment_geometry(VertexOutput input) : SV_Target0 {
+    return float4(input.world_normal, input.world_position.z);
 }

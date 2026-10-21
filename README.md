@@ -50,4 +50,4 @@ For a new file, run `git add path/to/file` before committing.
 uv run python npr_demo.py --style combined --output outputs/branch1.png
 ```
 
-Requires Git and uv. See [README_NPR.md](README_NPR.md) for rendering details, controls, attribution, and known limits. macOS Metal and the interactive window still require verification on your machine.
+Requires Git and uv. See [README_NPR.md](README_NPR.md) for rendering details, controls, attribution, and known limits. The default teapot has been verified on Apple M5 / Metal, including four rotation times; the interactive window was confirmed by the user. See [VALIDATION.md](VALIDATION.md) for evidence and the hardware regression command.
