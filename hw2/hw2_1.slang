@@ -1,3 +1,4 @@
+import raster_common;
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void compute_main(uint2 tid : SV_DispatchThreadID,
@@ -14,7 +15,7 @@ void compute_main(uint2 tid : SV_DispatchThreadID,
         return;
     }
 
-    // TODO: HW 2.1
-
-    image[ipixel] = float4(float3(0.0), 1.0);
+    float3 b_prime;
+    if (!barycentric(float2(ipixel)+0.5, sp0, sp1, sp2, b_prime)) return;
+    image[ipixel] = float4(color, 1.0);
 }

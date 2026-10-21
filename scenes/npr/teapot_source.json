@@ -1,0 +1,12 @@
+{
+  "url": "https://graphics.cs.utah.edu/teapot/",
+  "generator_url": "https://graphics.cs.utah.edu/teapot/teapot_generator.js",
+  "wasm_url": "https://graphics.cs.utah.edu/teapot/teapot_generator.wasm",
+  "option_bitmask": 233832767,
+  "resolution": 24,
+  "orientation": "Y-up; swap original Y/Z and reverse winding",
+  "sha256": {
+    "utah-generator.js": "0b35993e5bc791e057f1fe94c5d0935c7b03fefe49b15f409d84a6250d14a6e3",
+    "teapot_generator.wasm": "27b36e0e6da2d37427221e8c648715fdf36cb2db6fb32ee585792ed34569510d"
+  }
+}
