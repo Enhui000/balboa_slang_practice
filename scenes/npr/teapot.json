@@ -1,0 +1,117 @@
+{
+  "duration": 12,
+  "camera": {
+    "resolution": [
+      1024,
+      768
+    ],
+    "s": 0.41421356237309503,
+    "z_near": 0.1,
+    "transform": [
+      {
+        "lookat": {
+          "position": [
+            0,
+            5,
+            7.5
+          ],
+          "target": [
+            0,
+            2.8,
+            0
+          ],
+          "up": [
+            0,
+            1,
+            0
+          ]
+        }
+      }
+    ]
+  },
+  "light": {
+    "position": [
+      3,
+      4,
+      2.64575
+    ],
+    "light_color": [
+      1,
+      1,
+      1
+    ]
+  },
+  "background": [
+    0.94,
+    0.92,
+    0.87
+  ],
+  "objects": [
+    {
+      "filename": "utah_teapot_mesh.json",
+      "material": {
+        "Kd": [
+          1,
+          0.5,
+          0.5
+        ],
+        "Ks": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "exponent": 32
+      },
+      "transform_keyframes": [
+        {
+          "time": 0,
+          "transform": [
+            {
+              "rotate_y": [
+                -20
+              ]
+            },
+            {
+              "translate": [
+                0,
+                2,
+                0
+              ]
+            },
+            {
+              "scale": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            }
+          ]
+        },
+        {
+          "time": 12,
+          "transform": [
+            {
+              "rotate_y": [
+                340
+              ]
+            },
+            {
+              "translate": [
+                0,
+                2,
+                0
+              ]
+            },
+            {
+              "scale": [
+                0.8,
+                0.8,
+                0.8
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

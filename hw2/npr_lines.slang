@@ -1,0 +1,104 @@
+// Port of kwandrus/SobelOutline.frag; upstream calls this a Sobel filter,
+// though its actual operator is a weighted center-difference range.
+// Same normal/depth operator, weights, threshold squaring and max composition.
+Texture2D<float4> scene_color;
+Texture2D<float4> normal_depth;
+Texture2D<float4> features;
+uniform uint line_mode;
+uniform float crease_strength;
+uniform float crease_width;
+uniform float crease_threshold;
+RWTexture2D<float4> output_image;
+uniform uint width;
+uniform uint height;
+uniform uint style;
+uniform uint ssaa;
+uniform float line_width;
+uniform float normal_threshold;
+uniform float depth_threshold;
+uniform float line_opacity;
+uniform float3 ink_color;
+float4 geometry(int2 p) {
+    // Defined behavior at viewport borders, unlike out-of-range texelFetch.
+    return normal_depth.Load(int3(clamp(p,int2(0),int2(width-1,height-1)),0));
+}
+float edge_at(int2 p) {
+    float4 center=geometry(p);
+    float depth_range=0;
+    float normal_range=0;
+    int radius=max(1,int(round(line_width*float(ssaa))));
+    for (int y=-1;y<=1;y++) for (int x=-1;x<=1;x++) {
+        if (x==0 && y==0) continue;
+        float weight=(x==0 || y==0) ? 2.0/8.0 : 1.0/8.0;
+        float4 sample=geometry(p+int2(x,y)*radius);
+        depth_range=max(depth_range,abs(sample.w-center.w)*weight);
+        normal_range=max(normal_range,length(sample.xyz-center.xyz)*weight);
+    }
+    // The center's filter weight is zero, so upstream gmin is always zero.
+    float d=depth_range/depth_threshold;
+    float n=normal_range/normal_threshold;
+    return saturate(max(d*d,n*n));
+}
+float4 feature_at(float2 p) {
+    int2 i=int2(floor(p));
+    float2 f=frac(p);
+    int2 hi=int2(width-1,height-1);
+    float4 a=features.Load(int3(clamp(i,int2(0),hi),0));
+    float4 b=features.Load(int3(clamp(i+int2(1,0),int2(0),hi),0));
+    float4 c=features.Load(int3(clamp(i+int2(0,1),int2(0),hi),0));
+    float4 d=features.Load(int3(clamp(i+int2(1,1),int2(0),hi),0));
+    return lerp(lerp(a,b,f.x),lerp(c,d,f.x),f.y);
+}
+float thin_feature(int2 p) {
+    float4 f=feature_at(float2(p));
+    if(f.x<=0) return f.y;
+    float2 direction=f.zw;
+    float ahead=feature_at(float2(p)+direction).x;
+    float behind=feature_at(float2(p)-direction).x;
+    // Soft nonmaximum suppression makes creases thin, with no binary cutoff.
+    float peak=1.0-smoothstep(1.03,1.35,max(ahead,behind)/max(f.x,1e-5));
+    float2 tangent=float2(-direction.y,direction.x);
+    float support=feature_at(float2(p)+tangent).x+feature_at(float2(p)-tangent).x;
+    // A connected stroke has support along its tangent. Isolated specks do not.
+    float coherent=smoothstep(crease_threshold*0.7,crease_threshold*2.0,support);
+    float strength=smoothstep(crease_threshold,crease_threshold*2.2,f.x);
+    return max(f.y,strength*peak*coherent*crease_strength);
+}
+float refined_edge(int2 p) {
+    bool foreground=geometry(p).w>0;
+    float distance_to_boundary=1e6;
+    float radius=0.5*line_width*float(ssaa);
+    int search=min(5,int(ceil(radius+1.0)));
+    for(int y=-search;y<=search;y++) for(int x=-search;x<=search;x++) {
+        bool other=geometry(p+int2(x,y)).w>0;
+        if(other!=foreground) distance_to_boundary=min(distance_to_boundary,length(float2(x,y))-0.5);
+    }
+    float silhouette=1.0-smoothstep(max(0.0,radius-0.5),radius+0.5,distance_to_boundary);
+    float crease=thin_feature(p);
+    // Interior lines have their own width; the contour radius cannot fatten them.
+    float expand=max(0.0,0.5*crease_width*float(ssaa)-0.5);
+    if(expand>0 && foreground) {
+        for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++) {
+            float distance=length(float2(x,y));
+            if(distance==0) continue;
+            float coverage=saturate(expand+1.0-distance);
+            crease=max(crease,thin_feature(p+int2(x,y))*coverage);
+        }
+    }
+    return max(silhouette,foreground?crease:0.0);
+}
+[shader("compute")]
+[numthreads(8,8,1)]
+void compute_main(uint2 tid : SV_DispatchThreadID) {
+    uint out_width,out_height;
+    output_image.GetDimensions(out_width,out_height);
+    if (tid.x>=out_width || tid.y>=out_height) return;
+    float3 total=0;
+    for (uint y=0;y<ssaa;y++) for (uint x=0;x<ssaa;x++) {
+        int2 p=int2(tid*ssaa+uint2(x,y));
+        float3 color=scene_color.Load(int3(p,0)).rgb;
+        if (style==2 || style==4) color=lerp(color,ink_color,(line_mode==1?refined_edge(p):edge_at(p))*line_opacity);
+        total+=color;
+    }
+    output_image[tid]=float4(total/float(ssaa*ssaa),1.0);
+}
