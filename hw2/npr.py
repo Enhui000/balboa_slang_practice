@@ -67,7 +67,8 @@ class NPRRenderer:
         for mesh in self.scene.meshes:
             gpu = {}
             for name, dtype in [('vertices', 'float3'), ('vertex_normals', 'float3'), ('vertex_uvs', 'float2')]:
-                gpu[name] = buffer.structured_typed_buffer_from_numpy(self.device, getattr(mesh, name), dtype)
+                gpu[name] = buffer.structured_typed_buffer_from_numpy(
+                    self.device, np.ascontiguousarray(getattr(mesh, name), dtype=np.float32).reshape(-1), 'float')
             indices = np.ascontiguousarray(mesh.faces.reshape(-1), dtype=np.uint32)
             gpu['indices'] = self.device.create_buffer(size=indices.nbytes, usage=spy.BufferUsage.index_buffer, data=indices)
             gpu['state'] = spy.RenderState({'viewports': [spy.Viewport.from_size(w,h)],
@@ -123,6 +124,41 @@ class NPRRenderer:
             depth_threshold=float(args.depth_threshold), line_opacity=float(args.line_opacity),
             ink_color=spy.float3(args.ink_color)))
 
+    def diagnose(self, directory, t, style):
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        result = self.pixels(t, style)
+        color = self.color.to_numpy()
+        geometry = self.geometry.to_numpy()
+        background = np.asarray(self.scene.background)
+        color_changed = np.any(np.abs(color[..., :3] - background) > 1e-5, axis=-1)
+        geometry_changed = np.any(np.abs(geometry - np.array([0.5, 0.5, 0, 0])) > 1e-5, axis=-1)
+        report = dict(mesh_count=len(self.scene.meshes),
+                      triangle_count=sum(len(m.faces) for m in self.scene.meshes),
+                      color_pixels=int(color_changed.sum()),
+                      geometry_pixels=int(geometry_changed.sum()),
+                      geometry_finite=bool(np.isfinite(geometry).all()),
+                      output_finite=bool(np.isfinite(result).all()))
+        camera = self.scene.camera
+        view = np.linalg.inv(animated_matrix(camera.cam_to_world, camera.transform_keyframes, t % self.scene.duration))
+        visible = 0
+        for mesh in self.scene.meshes:
+            model = animated_matrix(mesh.model_matrix, mesh.transform_keyframes, t % self.scene.duration)
+            vertices = np.concatenate([mesh.vertices, np.ones((len(mesh.vertices), 1))], axis=1)
+            clip = vertices @ (self.projection @ view @ model).T
+            w = clip[:, 3]
+            inside = (w > 0) & (np.abs(clip[:, 0]) <= w) & (np.abs(clip[:, 1]) <= w) & (clip[:, 2] >= 0) & (clip[:, 2] <= w)
+            visible += int(inside.sum())
+        report['cpu_vertices_inside_clip'] = visible
+        image.save_png(directory / 'color.png', color)
+        image.save_png(directory / 'combined.png', result)
+        mask = np.repeat(geometry_changed[..., None], 4, axis=-1).astype(np.float32)
+        mask[..., 3] = 1
+        image.save_png(directory / 'coverage.png', mask)
+        (directory / 'report.json').write_text(json.dumps(report, indent=2))
+        print('NPR diagnostics: ' + json.dumps(report))
+        print('Diagnostic images: ' + str(directory))
+
     def pixels(self, t, style):
         encoder = self.device.create_command_encoder()
         self.render(encoder, t, style)
@@ -149,7 +185,9 @@ def run(args):
     if args.frames < 2 or args.fps < 1:
         raise ValueError('Turntable requires at least 2 frames and a positive FPS')
     renderer = NPRRenderer(args)
-    if args.compare:
+    if args.diagnose:
+        renderer.diagnose(args.diagnose, args.time, args.style)
+    elif args.compare:
         directory = Path(args.compare)
         for style in STYLES:
             renderer.save(directory/f'{Path(args.scene).stem}_{style}.png', args.time, style)
@@ -173,6 +211,7 @@ def run(args):
 
 
 def add_arguments(parser):
+    parser.add_argument('--diagnose', metavar='DIRECTORY', help='Export raw render color, geometry coverage, and diagnostic counts')
     parser.add_argument('scene', nargs='?', default='scenes/npr/teapot.json')
     parser.add_argument('-time', '--time', type=float, default=0.0)
     parser.add_argument('--style', choices=list(STYLES), default='combined')

@@ -1,8 +1,8 @@
 // Slang ports of kwandrus ToonShading.frag and Hatching.frag.
 // Exact upstream files and attribution are in third_party/npr_glsl and THIRD_PARTY.md.
-StructuredBuffer<float3> vertices;
-StructuredBuffer<float3> vertex_normals;
-StructuredBuffer<float2> vertex_uvs;
+StructuredBuffer<float> vertices;
+StructuredBuffer<float> vertex_normals;
+StructuredBuffer<float> vertex_uvs;
 uniform float4x4 MVP;
 uniform float4x4 model_matrix;
 uniform float3x3 normal_matrix;
@@ -42,11 +42,15 @@ struct FragmentOutput {
 };
 [shader("vertex")]
 VertexOutput vertex_main(uint vid : SV_VertexID) {
+    // Scalar storage avoids backend-dependent float3 array alignment.
+    float3 position = float3(vertices[3*vid], vertices[3*vid+1], vertices[3*vid+2]);
+    float3 normal = float3(vertex_normals[3*vid], vertex_normals[3*vid+1], vertex_normals[3*vid+2]);
+    float2 uv = float2(vertex_uvs[2*vid], vertex_uvs[2*vid+1]);
     VertexOutput output;
-    output.position = mul(MVP,float4(vertices[vid],1.0));
-    output.world_position = mul(model_matrix,float4(vertices[vid],1.0)).xyz;
-    output.world_normal = mul(normal_matrix,vertex_normals[vid]);
-    output.uv = vertex_uvs[vid];
+    output.position = mul(MVP,float4(position,1.0));
+    output.world_position = mul(model_matrix,float4(position,1.0)).xyz;
+    output.world_normal = mul(normal_matrix,normal);
+    output.uv = uv;
     return output;
 }
 float hatch_tone(float diffuse, float2 pixel) {
